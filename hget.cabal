@@ -33,8 +33,10 @@ library
   build-depends:
       base >=4.7 && <5
     , brick
+    , http-conduit
     , lens
     , text
+    , time
     , vty
   default-language: Haskell2010
 
@@ -49,8 +51,10 @@ executable hget-exe
       base >=4.7 && <5
     , brick
     , hget
+    , http-conduit
     , lens
     , text
+    , time
     , vty
   default-language: Haskell2010
 
@@ -66,7 +70,9 @@ test-suite hget-test
       base >=4.7 && <5
     , brick
     , hget
+    , http-conduit
     , lens
     , text
+    , time
     , vty
   default-language: Haskell2010

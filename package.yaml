@@ -25,6 +25,8 @@ dependencies:
 - lens
 - text
 - vty
+- http-conduit
+- time
 
 library:
   source-dirs: src
