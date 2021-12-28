@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -21,7 +20,7 @@ import qualified Data.Text as T
 import Formatting ((%))
 import qualified Formatting as F
 import GHC.Natural (intToNatural)
-import Membrain (Byte, byte, showMemory, toMemory)
+-- import Membrain (Byte, byte, showMemory, toMemory)
 import Network.HTTP.Conduit
 
 data DownloadProgress
@@ -40,9 +39,8 @@ instance Show DownloadProgress where
   show (BoundProgress a b) =
     let fa = fromIntegral a :: Float
         fb = fromIntegral b :: Float
-        --  in T.printf "%.2f%%" ((100 * fa) / fb)
      in T.unpack $ F.sformat (F.float % "%") (100 * fa / fb)
-  show (UnboundProgress a) = showMemory $ byte $ intToNatural a
+  show (UnboundProgress a) = T.unpack $ F.sformat (F.bytes (F.fixed 2)) a
 
 request :: Text -> FilePath -> IO ()
 request url path = do

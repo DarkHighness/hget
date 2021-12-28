@@ -36,7 +36,6 @@ dependencies:
 - time
 - stm
 - bytestring
-- membrain
 - optparse-applicative
 - formatting
 

@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module HGet.Internal.UI where
@@ -24,7 +23,7 @@ import qualified Data.Time as TM
 import qualified Data.Time.Clock.System as TM
 import qualified Data.Time.Format.ISO8601 as TM
 import qualified Data.Time.LocalTime as TM
-import Formatting ((%))
+import Formatting ((%), (%.))
 import qualified Formatting as F
 import Graphics.Vty (Event (..), Key (..))
 import qualified Graphics.Vty as V
@@ -63,9 +62,11 @@ buildInitialState = do
   return HGetState {_title = "HGet 0.0.0.1", _time = t, _zone = z}
 
 formatTime :: TimeZone -> UTCTime -> Text
-formatTime z t = F.sformat (F.string % " " % F.int % ":" % F.int % ":" % F.int % "") (TM.iso8601Show ld) todHour todMin (floor todSec :: Int)
+formatTime z t = F.sformat (F.string % " " % padInt % ":" % padInt % ":" % padInt % "") (TM.iso8601Show ld) todHour todMin (floor todSec :: Int)
   where
     (LocalTime ld (TimeOfDay todHour todMin todSec)) = TM.utcToLocalTime z t
+
+    padInt = F.left 2 '0' %. F.int
 
 drawText :: Text -> Widget n
 drawText = B.str . T.unpack

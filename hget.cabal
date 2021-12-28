@@ -48,7 +48,6 @@ library
     , http-client-tls
     , http-conduit
     , lens
-    , membrain
     , optparse-applicative
     , resourcet
     , stm
@@ -78,7 +77,6 @@ executable hget-exe
     , http-client-tls
     , http-conduit
     , lens
-    , membrain
     , optparse-applicative
     , resourcet
     , stm
@@ -109,7 +107,6 @@ test-suite hget-test
     , http-client-tls
     , http-conduit
     , lens
-    , membrain
     , optparse-applicative
     , resourcet
     , stm
