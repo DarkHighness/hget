@@ -36,6 +36,7 @@ dependencies:
 - time
 - stm
 - bytestring
+- membrain
 
 library:
   source-dirs: src
