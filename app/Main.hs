@@ -26,49 +26,49 @@ import qualified Graphics.Vty as V
 import qualified Graphics.Vty.Input.Events as V
 import qualified Text.Printf as T
 
-data HgetState = HgetState
+data HGetState = HGetState
   { _title :: String,
     _time :: TM.UTCTime,
     _zone :: TM.TimeZone
   }
   deriving (Show, Eq)
 
-$(makeLenses ''HgetState)
+$(makeLenses ''HGetState)
 
-data HgetEvent = TickEvent TM.UTCTime
+data HGetEvent = TickEvent TM.UTCTime
 
 type ResourceName = String
 
-hgetApp :: App HgetState HgetEvent ResourceName
+hgetApp :: App HGetState HGetEvent ResourceName
 hgetApp =
   App
-    { appDraw = drawHgetUI,
+    { appDraw = drawHGetUI,
       appChooseCursor = B.showFirstCursor,
-      appHandleEvent = handleHgetEvent,
+      appHandleEvent = handleHGetEvent,
       appStartEvent = return,
       appAttrMap = const $ B.attrMap mempty []
     }
 
-buildInitialState :: IO HgetState
+buildInitialState :: IO HGetState
 buildInitialState = do
   z <- TM.getCurrentTimeZone
   t <- TM.getCurrentTime
-  return HgetState {_title = "Hget 0.0.0.1", _time = t, _zone = z}
+  return HGetState {_title = "HGet 0.0.0.1", _time = t, _zone = z}
 
 formatTime :: TimeZone -> UTCTime -> String
 formatTime z t = T.printf "%s %02d:%02d:%02d" (T.iso8601Show ld) todHour todMin (floor todSec :: Integer)
   where
     (LocalTime ld (TimeOfDay todHour todMin todSec)) = TM.utcToLocalTime z t
 
-drawHgetUI :: HgetState -> [Widget ResourceName]
-drawHgetUI st = [B.border $ B.padLeftRight 1 $ B.vBox [B.str $ st ^. title, B.str timeString]]
+drawHGetUI :: HGetState -> [Widget ResourceName]
+drawHGetUI st = [B.border $ B.padLeftRight 1 $ B.vBox [B.str $ st ^. title, B.str timeString]]
   where
     timeString = formatTime (st ^. zone) (st ^. time)
 
-handleHgetEvent :: HgetState -> BrickEvent ResourceName HgetEvent -> EventM ResourceName (Next HgetState)
-handleHgetEvent s (AppEvent (TickEvent t)) = B.continue $ time .~ t $ s
-handleHgetEvent s (VtyEvent (EvKey (KChar 'q') [])) = B.halt s
-handleHgetEvent s _ = B.continue s
+handleHGetEvent :: HGetState -> BrickEvent ResourceName HGetEvent -> EventM ResourceName (Next HGetState)
+handleHGetEvent s (AppEvent (TickEvent t)) = B.continue $ time .~ t $ s
+handleHGetEvent s (VtyEvent (EvKey (KChar 'q') [])) = B.halt s
+handleHGetEvent s _ = B.continue s
 
 main :: IO ()
 main = do
