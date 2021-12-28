@@ -43,6 +43,7 @@ library
     , conduit
     , conduit-extra
     , containers
+    , formatting
     , http-client
     , http-client-tls
     , http-conduit
@@ -71,6 +72,7 @@ executable hget-exe
     , conduit
     , conduit-extra
     , containers
+    , formatting
     , hget
     , http-client
     , http-client-tls
@@ -101,6 +103,7 @@ test-suite hget-test
     , conduit
     , conduit-extra
     , containers
+    , formatting
     , hget
     , http-client
     , http-client-tls

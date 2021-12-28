@@ -38,6 +38,7 @@ dependencies:
 - bytestring
 - membrain
 - optparse-applicative
+- formatting
 
 library:
   source-dirs: src

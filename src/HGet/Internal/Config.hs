@@ -1,20 +1,23 @@
 module HGet.Internal.Config where
 
 import Data.Semigroup ((<>))
+import Data.Text (Text)
 import Options.Applicative
 
 data Config = Config
-  { _taskUrl :: String,
-    _taskFileSaveTo :: Maybe String,
+  { _taskUrl :: Maybe Text,
+    _taskFileSaveTo :: Maybe Text,
     _noUI :: Bool
   }
 
 parseConfig :: Parser Config
 parseConfig =
   Config
-    <$> argument
-      str
-      ( metavar "URL"
+    <$> optional
+      ( argument
+          str
+          ( metavar "URL"
+          )
       )
     <*> optional
       ( strOption

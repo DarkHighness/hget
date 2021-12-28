@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -15,11 +16,13 @@ import Data.Conduit.Binary (sinkFile)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
+import Data.Text (Text)
 import qualified Data.Text as T
+import Formatting ((%))
+import qualified Formatting as F
 import GHC.Natural (intToNatural)
 import Membrain (Byte, byte, showMemory, toMemory)
 import Network.HTTP.Conduit
-import qualified Text.Printf as T
 
 data DownloadProgress
   = BoundProgress
@@ -37,12 +40,13 @@ instance Show DownloadProgress where
   show (BoundProgress a b) =
     let fa = fromIntegral a :: Float
         fb = fromIntegral b :: Float
-     in T.printf "%.2f%%" ((100 * fa) / fb)
+        --  in T.printf "%.2f%%" ((100 * fa) / fb)
+     in T.unpack $ F.sformat (F.float % "%") (100 * fa / fb)
   show (UnboundProgress a) = showMemory $ byte $ intToNatural a
 
-request :: String -> FilePath -> IO ()
+request :: Text -> FilePath -> IO ()
 request url path = do
-  request <- parseRequest url
+  request <- (parseRequest . T.unpack) url
   let headRequest = request {method = "HEAD"}
   manager <- newManager tlsManagerSettings
   runResourceT $ do
