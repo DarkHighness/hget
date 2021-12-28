@@ -1,17 +1,17 @@
-module HGet.Internal.Settings where
+module HGet.Internal.Config where
 
 import Data.Semigroup ((<>))
 import Options.Applicative
 
-data Settings = Settings
+data Config = Config
   { _taskUrl :: String,
     _taskFileSaveTo :: Maybe String,
     _noUI :: Bool
   }
 
-parseSettings :: Parser Settings
-parseSettings =
-  Settings
+parseConfig :: Parser Config
+parseConfig =
+  Config
     <$> argument
       str
       ( metavar "URL"

@@ -26,8 +26,8 @@ source-repository head
 library
   exposed-modules:
       HGet.Internal.CLI
+      HGet.Internal.Config
       HGet.Internal.Network
-      HGet.Internal.Settings
       HGet.Internal.UI
       Lib
   other-modules:
