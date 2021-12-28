@@ -22,11 +22,11 @@ import Network.HTTP.Conduit
 import qualified Text.Printf as T
 
 data DownloadProgress
-  = BoundedRange
+  = BoundProgress
       { _done :: Int,
         _total :: Int
       }
-  | UnBoundedRange
+  | UnboundProgress
       { _done :: Int
       }
   deriving (Eq)
@@ -34,11 +34,11 @@ data DownloadProgress
 $(makeLenses ''DownloadProgress)
 
 instance Show DownloadProgress where
-  show (BoundedRange a b) =
+  show (BoundProgress a b) =
     let fa = fromIntegral a :: Float
         fb = fromIntegral b :: Float
      in T.printf "%.2f%%" ((100 * fa) / fb)
-  show (UnBoundedRange a) = showMemory $ byte $ intToNatural a
+  show (UnboundProgress a) = showMemory $ byte $ intToNatural a
 
 request :: String -> FilePath -> IO ()
 request url path = do
@@ -49,7 +49,7 @@ request url path = do
     response <- http headRequest manager
     let headers = M.fromList $ responseHeaders response
     let length = fst . fromJust . B.readInt . fromJust $ M.lookup "Content-Length" headers
-    let range = BoundedRange {_done = 0, _total = length}
+    let range = BoundProgress {_done = 0, _total = length}
     runResourceT $ do
       void $
         flip ST.runStateT range $ do

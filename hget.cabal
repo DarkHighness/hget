@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+      HGet.Internal.CLI
       HGet.Internal.Network
       HGet.Internal.UI
       Lib
@@ -46,6 +47,7 @@ library
     , http-conduit
     , lens
     , membrain
+    , optparse-applicative
     , resourcet
     , stm
     , text
@@ -74,6 +76,7 @@ executable hget-exe
     , http-conduit
     , lens
     , membrain
+    , optparse-applicative
     , resourcet
     , stm
     , text
@@ -103,6 +106,7 @@ test-suite hget-test
     , http-conduit
     , lens
     , membrain
+    , optparse-applicative
     , resourcet
     , stm
     , text

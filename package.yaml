@@ -37,6 +37,7 @@ dependencies:
 - stm
 - bytestring
 - membrain
+- optparse-applicative
 
 library:
   source-dirs: src
