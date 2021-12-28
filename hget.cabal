@@ -6,10 +6,10 @@ cabal-version: 1.12
 
 name:           hget
 version:        0.1.0.0
-description:    Please see the README on GitHub at <https://github.com/githubuser/hget#readme>
-homepage:       https://github.com/githubuser/hget#readme
-bug-reports:    https://github.com/githubuser/hget/issues
-author:         Author name here
+description:    Please see the README on GitHub at <https://github.com/DarkHighness/hget#readme>
+homepage:       https://github.com/DarkHighness/hget#readme
+bug-reports:    https://github.com/DarkHighness/hget/issues
+author:         Twiliness
 maintainer:     example@example.com
 copyright:      2021 Author name here
 license:        BSD3
@@ -21,22 +21,35 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/githubuser/hget
+  location: https://github.com/DarkHighness/hget
 
 library
   exposed-modules:
+      HGet.Internal.Network
+      HGet.Internal.UI
       Lib
   other-modules:
       Paths_hget
   hs-source-dirs:
       src
+  default-extensions:
+      OverloadedStrings
   build-depends:
       base >=4.7 && <5
     , brick
+    , bytestring
+    , conduit
+    , conduit-extra
+    , containers
+    , http-client
+    , http-client-tls
     , http-conduit
     , lens
+    , resourcet
+    , stm
     , text
     , time
+    , transformers
     , vty
   default-language: Haskell2010
 
@@ -50,11 +63,20 @@ executable hget-exe
   build-depends:
       base >=4.7 && <5
     , brick
+    , bytestring
+    , conduit
+    , conduit-extra
+    , containers
     , hget
+    , http-client
+    , http-client-tls
     , http-conduit
     , lens
+    , resourcet
+    , stm
     , text
     , time
+    , transformers
     , vty
   default-language: Haskell2010
 
@@ -69,10 +91,19 @@ test-suite hget-test
   build-depends:
       base >=4.7 && <5
     , brick
+    , bytestring
+    , conduit
+    , conduit-extra
+    , containers
     , hget
+    , http-client
+    , http-client-tls
     , http-conduit
     , lens
+    , resourcet
+    , stm
     , text
     , time
+    , transformers
     , vty
   default-language: Haskell2010

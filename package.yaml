@@ -1,8 +1,8 @@
 name:                hget
 version:             0.1.0.0
-github:              "githubuser/hget"
+github:              "DarkHighness/hget"
 license:             BSD3
-author:              "Author name here"
+author:              "Twiliness"
 maintainer:          "example@example.com"
 copyright:           "2021 Author name here"
 
@@ -17,19 +17,30 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/githubuser/hget#readme>
+description:         Please see the README on GitHub at <https://github.com/DarkHighness/hget#readme>
 
 dependencies:
 - base >= 4.7 && < 5
 - brick
 - lens
+- transformers
+- resourcet
+- containers
 - text
 - vty
+- http-client
+- http-client-tls
 - http-conduit
+- conduit
+- conduit-extra
 - time
+- stm
+- bytestring
 
 library:
   source-dirs: src
+  default-extensions:
+    - OverloadedStrings
 
 executables:
   hget-exe:
