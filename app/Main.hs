@@ -24,6 +24,8 @@ import qualified Data.Time.LocalTime as TM
 import Graphics.Vty (Event (..), Key (..))
 import qualified Graphics.Vty as V
 import qualified Graphics.Vty.Input.Events as V
+import HGet.Internal.Settings (parseSettings)
+import qualified Options.Applicative as CLI
 import qualified Text.Printf as T
 
 data HGetState = HGetState
@@ -72,6 +74,8 @@ handleHGetEvent s _ = B.continue s
 
 main :: IO ()
 main = do
+  settings <- CLI.execParser opts
+
   chan <- BC.newBChan 10
   forkIO $
     forever $ do
@@ -82,3 +86,5 @@ main = do
   let buildVty = V.mkVty V.defaultConfig
   initialVty <- buildVty
   void $ B.customMain initialVty buildVty (return chan) hgetApp initialState
+  where
+    opts = CLI.info (parseSettings CLI.<**> CLI.helper) (CLI.fullDesc <> CLI.progDesc "HGet 0.0.0.1" <> CLI.header "HGet 0.0.0.1")

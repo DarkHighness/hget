@@ -27,6 +27,7 @@ library
   exposed-modules:
       HGet.Internal.CLI
       HGet.Internal.Network
+      HGet.Internal.Settings
       HGet.Internal.UI
       Lib
   other-modules:
