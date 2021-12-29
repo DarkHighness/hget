@@ -5,19 +5,26 @@
 
 module HGet.Internal.Network where
 
-import Conduit (MonadIO (liftIO), mapMC, runConduit, runResourceT, (.|))
+import Conduit (ConduitT, MonadIO (liftIO), awaitForever, concatC, foldMapMC, mapMC, runConduit, runConduitRes, runResourceT, sinkFile, sourceFile, sourceFileBS, yieldM, yieldMany, (.|))
+import Control.Concurrent (forkIO)
+import Control.Concurrent.STM (TChan)
+import qualified Control.Concurrent.STM as STM
 import Control.Lens
 import Control.Lens.TH
 import Control.Monad
+import Control.Monad.Loops
 import Control.Monad.Trans.Resource (runResourceT)
+import Control.Monad.Trans.State (StateT (runStateT))
 import qualified Control.Monad.Trans.State as ST
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B
-import Data.Conduit.Binary (sinkFile)
+import qualified Data.Conduit.Binary as CB
+import Data.IORef (atomicWriteIORef, newIORef, readIORef)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe
+import Data.Sequence (mapWithIndex)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Formatting ((%))
@@ -56,11 +63,11 @@ download url path = do
     let headers = M.fromList $ responseHeaders response
     let length = fst . fromJust . B.readInt . fromJust $ M.lookup "Content-Length" headers
     let range = BoundProgress {_done = 0, _total = length}
-    runResourceT $ do
+    runResourceT $
       void $
         flip ST.runStateT range $ do
           response <- http request manager
-          runConduit $ responseBody response .| mapMC doProgress .| sinkFile path
+          runConduit $ responseBody response .| mapMC doProgress .| CB.sinkFile path
   where
     doProgress bs = do
       done += B.length bs
@@ -83,24 +90,45 @@ instance Show TaskInfo where
         (if supportRange then "yes" else "no")
         sizeInBytes
 
-data Task = Task
-  { taskUrl :: Text,
-    taskSavePath :: FilePath,
-    taskSizeInBytes :: Int,
-    taskSlices :: ByteRanges
+data TaskRange = TaskRange
+  { taskRangeFilePath :: FilePath,
+    taskRangeByteRange :: ByteRange,
+    taskRangeIndex :: Int
   }
   deriving (Show, Eq)
+
+type TaskRanges = [TaskRange]
+
+data Task = Task
+  { taskUrl :: Text,
+    taskRequest :: Request,
+    taskManager :: Manager,
+    taskSavePath :: FilePath,
+    taskSizeInBytes :: Int,
+    taskSlices :: TaskRanges
+  }
+
+instance Show Task where
+  show (Task url req man path size slices) =
+    T.unpack $
+      F.sformat
+        ("{ url: " % F.stext % ", request: " % F.string % ", path: " % F.string % ", size: " % F.bytes (F.fixed 2 % "") % ", slices: " % F.string % "}")
+        url
+        (show req)
+        path
+        size
+        (show slices)
 
 data DownloadResult = RequestSuccess | RequestRangeIgnored | RequestRangeIllegal ByteRange | RequestFailed Int
   deriving (Show)
 
 $(makeFields ''TaskInfo)
+$(makeFields ''TaskRange)
 $(makeFields ''Task)
 
-getTaskInfo :: Text -> Manager -> IO TaskInfo
-getTaskInfo url manager = do
-  request <- (parseRequest . T.unpack) url
-  let headRequest = setRequestMethod methodHead request
+getTaskInfo :: Text -> Request -> Manager -> IO TaskInfo
+getTaskInfo url req manager = do
+  let headRequest = setRequestMethod methodHead req
   runResourceT $ do
     response <- http headRequest manager
     let headers = (M.fromList . responseHeaders) response
@@ -110,19 +138,23 @@ getTaskInfo url manager = do
     let length = fst . fromJust . B.readInt . fromJust $ M.lookup hContentLength headers
     return $ TaskInfo url isRangeSupport length
 
-downloadRange :: Request -> ByteRange -> FilePath -> Manager -> IO DownloadResult
-downloadRange req range path manager = do
-  let request = setRequestHeader hContentRange [renderByteRange range] req
-
+downloadRange :: Request -> ByteRange -> FilePath -> Manager -> TChan Int -> IO DownloadResult
+downloadRange req range path manager chan = do
+  let request = setRequestHeader hRange [renderByteRanges [range]] req
   runResourceT $ do
     response <- http request manager
     case getResponseStatusCode response of
       200 -> return RequestRangeIgnored
       416 -> return $ RequestRangeIllegal range
       206 -> do
-        void $ runConduit $ responseBody response .| sinkFile path
+        void $ runConduit $ responseBody response .| mapMC progress .| CB.sinkFile path
         return RequestSuccess
       code -> return $ RequestFailed code
+  where
+    progress bs = do
+      liftIO . STM.atomically $
+        STM.writeTChan chan (B.length bs)
+      return bs
 
 splitRange :: Int -> Int -> ByteRanges
 splitRange sizeInBytes segmentCnt = map go [0 .. segmentCnt - 1]
@@ -131,18 +163,60 @@ splitRange sizeInBytes segmentCnt = map go [0 .. segmentCnt - 1]
     sizePerSeg = fromIntegral . ceiling $ (fromIntegral sizeInBytes :: Double) / (fromIntegral segmentCnt :: Double)
 
     go :: Int -> ByteRange
-    go i = ByteRangeFromTo (i' * sizePerSeg) (s' `min` (((i' + 1) * sizePerSeg) - 1))
+    go i = ByteRangeFromTo (i' * sizePerSeg) (s' `min` ((i' + 1) * sizePerSeg - 1))
       where
         i' = fromIntegral i
         s' = fromIntegral sizeInBytes - 1
 
-createTask :: Text -> Maybe FilePath -> IO Task
-createTask url path = do
+byteRangeToTaskRange :: FilePath -> Int -> Int -> ByteRange -> TaskRange
+byteRangeToTaskRange basePath 1 rangeIdx range = TaskRange basePath range rangeIdx
+byteRangeToTaskRange basePath totalCnt rangeIdx range | totalCnt > 1 = TaskRange (basePath ++ ".part" ++ show rangeIdx) range rangeIdx
+byteRangeToTaskRange _ _ _ _ = error "illegal count"
+
+createTask :: Text -> FilePath -> Int -> IO Task
+createTask url path threadCnt = do
   manager <- newManager tlsManagerSettings
-  taskInfo <- getTaskInfo url manager
+  request <- parseRequest . T.unpack $ url
+  taskInfo <- getTaskInfo url request manager
   let size = taskInfo ^. sizeInBytes
-  let ranges = splitRange size 4
-  let savePath = case path of
-        Nothing -> T.unpack $ T.takeWhileEnd ('/' /=) url
-        Just s -> s
-  return $ Task url savePath size ranges
+  let ranges = zipWith (byteRangeToTaskRange path threadCnt) [1 ..] (splitRange size threadCnt)
+  return $ Task url request manager path size ranges
+
+mergeFiles :: FilePath -> [FilePath] -> IO ()
+mergeFiles path paths = do
+  runConduitRes $
+    yieldMany paths
+      .| awaitForever sourceFile
+      .| sinkFile path
+
+doTask :: Task -> IO ()
+doTask (Task url request manager path size ranges) = do
+  chan <- STM.newTChanIO
+  forM_ ranges $ \(TaskRange path range idx) ->
+    forkIO $ do
+      r <- downloadRange request range path manager chan
+      case r of
+        RequestSuccess -> return ()
+        RequestRangeIgnored -> error "ignored"
+        RequestRangeIllegal br -> error "illegal"
+        RequestFailed n -> error . show $ n
+  count <- newIORef 0
+  void $ untilM (progress count chan) (predicate count size)
+  mergeFiles path (map taskRangeFilePath ranges)
+  where
+    progress ref chan = do
+      bytes <- STM.atomically $ do
+        STM.readTChan chan
+      prev <- readIORef ref
+      let new = prev + bytes
+      print new
+      atomicWriteIORef ref new
+
+    predicate ref hope = do
+      count <- readIORef ref
+      return $ count >= hope
+
+download' :: Text -> FilePath -> Int -> IO ()
+download' url path threadCount = do
+  task <- createTask url path threadCount
+  void $ doTask task

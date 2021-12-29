@@ -39,6 +39,7 @@ dependencies:
 - bytestring
 - optparse-applicative
 - formatting
+- monad-loops
 
 library:
   source-dirs: src

@@ -49,6 +49,7 @@ library
     , http-conduit
     , http-types
     , lens
+    , monad-loops
     , optparse-applicative
     , resourcet
     , stm
@@ -79,6 +80,7 @@ executable hget-exe
     , http-conduit
     , http-types
     , lens
+    , monad-loops
     , optparse-applicative
     , resourcet
     , stm
@@ -110,6 +112,7 @@ test-suite hget-test
     , http-conduit
     , http-types
     , lens
+    , monad-loops
     , optparse-applicative
     , resourcet
     , stm
