@@ -236,8 +236,12 @@ doTask (Task _ request manager path size ranges) = void $
     void $
       liftIO $ do
         let files = ranges ^.. each . filePath
-        mergeFiles path files
-        forM_ files removeFile
+        case length files of
+          0 -> error "illegal temp files count"
+          1 -> return ()
+          _ -> do
+            mergeFiles path files
+            forM_ files removeFile
 
 download' :: Text -> FilePath -> Int -> IO ()
 download' url path threadCount = do
