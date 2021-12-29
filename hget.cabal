@@ -43,6 +43,7 @@ library
     , bytestring
     , conduit
     , containers
+    , directory
     , formatting
     , http-client
     , http-client-tls
@@ -72,6 +73,7 @@ executable hget-exe
     , bytestring
     , conduit
     , containers
+    , directory
     , formatting
     , hget
     , http-client
@@ -103,6 +105,7 @@ test-suite hget-test
     , bytestring
     , conduit
     , containers
+    , directory
     , formatting
     , hget
     , http-client

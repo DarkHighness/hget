@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -10,14 +11,16 @@ import qualified Conduit as C
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TChan)
 import qualified Control.Concurrent.STM as STM
-import Control.Lens ((+=), (^.))
+import Control.Lens (Each (each), (+=), (^.), (^..))
 import Control.Lens.TH (makeFields, makeLenses)
 import Control.Monad (forM_, void)
-import Control.Monad.Loops (untilM)
+import Control.Monad.Loops (whileM_)
+import Control.Monad.Trans.Class (MonadTrans (lift))
+import Control.Monad.Trans.State (StateT)
 import qualified Control.Monad.Trans.State as ST
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B
-import Data.IORef (atomicWriteIORef, newIORef, readIORef)
+import Data.IORef (atomicWriteIORef, readIORef)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -40,6 +43,7 @@ import Network.HTTP.Types
   )
 import qualified Network.HTTP.Types as HC
 import Network.HTTP.Types.Header (hAcceptRanges)
+import System.Directory (removeFile)
 
 data DownloadProgress
   = BoundProgress
@@ -190,38 +194,50 @@ createTask url path threadCnt = do
   return $ Task url request manager path size ranges
 
 mergeFiles :: FilePath -> [FilePath] -> IO ()
-mergeFiles path paths = do
+mergeFiles path paths =
   C.runConduitRes $
     C.yieldMany paths
       .| C.awaitForever C.sourceFile
       .| C.sinkFile path
 
 doTask :: Task -> IO ()
-doTask (Task _ request manager path size ranges) = do
-  chan <- STM.newTChanIO
-  forM_ ranges $ \(TaskRange path range _) ->
-    forkIO $ do
-      r <- downloadRange request range path manager chan
-      case r of
-        RequestSuccess -> return ()
-        RequestRangeIgnored -> error "ignored"
-        RequestRangeIllegal br -> error $ "illegal range" ++ show br
-        RequestFailed n -> error . show $ n
-  count <- newIORef 0
-  void $ untilM (progress count chan) (predicate count size)
-  mergeFiles path (map taskRangeFilePath ranges)
-  where
-    progress ref chan = do
-      bytes <- STM.atomically $ do
-        STM.readTChan chan
-      prev <- readIORef ref
-      let new = prev + bytes
-      print new
-      atomicWriteIORef ref new
+doTask (Task _ request manager path size ranges) = void $
+  flip ST.evalStateT 0 $ do
+    chan <- liftIO STM.newTChanIO
 
-    predicate ref hope = do
-      count <- readIORef ref
-      return $ count >= hope
+    void $
+      liftIO $ do
+        forM_
+          ranges
+          ( \(TaskRange tempPath range _) ->
+              forkIO $ do
+                r <- downloadRange request range tempPath manager chan
+                case r of
+                  RequestSuccess -> return ()
+                  RequestRangeIgnored -> error "ignored"
+                  RequestRangeIllegal br -> error $ "illegal range" ++ show br
+                  RequestFailed n -> error . show $ n
+          )
+
+    whileM_
+      ( do
+          c <- ST.get
+          return $ c < size
+      )
+      ( do
+          c <- liftIO $
+            STM.atomically $ do
+              STM.readTChan chan
+          s <- ST.get
+          let s' = s + c
+          ST.put s'
+      )
+
+    void $
+      liftIO $ do
+        let files = ranges ^.. each . filePath
+        mergeFiles path files
+        forM_ files removeFile
 
 download' :: Text -> FilePath -> Int -> IO ()
 download' url path threadCount = do

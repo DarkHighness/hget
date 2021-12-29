@@ -39,6 +39,7 @@ dependencies:
 - optparse-applicative
 - formatting
 - monad-loops
+- directory
 
 library:
   source-dirs: src
