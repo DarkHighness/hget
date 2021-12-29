@@ -41,7 +41,6 @@ library
     , brick
     , bytestring
     , conduit
-    , conduit-extra
     , containers
     , formatting
     , http-client
@@ -71,7 +70,6 @@ executable hget-exe
     , brick
     , bytestring
     , conduit
-    , conduit-extra
     , containers
     , formatting
     , hget
@@ -103,7 +101,6 @@ test-suite hget-test
     , brick
     , bytestring
     , conduit
-    , conduit-extra
     , containers
     , formatting
     , hget

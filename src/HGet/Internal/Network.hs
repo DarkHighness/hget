@@ -5,33 +5,45 @@
 
 module HGet.Internal.Network where
 
-import Conduit (ConduitT, MonadIO (liftIO), awaitForever, concatC, foldMapMC, mapMC, runConduit, runConduitRes, runResourceT, sinkFile, sourceFile, sourceFileBS, yieldM, yieldMany, (.|))
+import Conduit (ConduitT, MonadIO (..), (.|))
+import qualified Conduit as C
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TChan)
 import qualified Control.Concurrent.STM as STM
-import Control.Lens
-import Control.Lens.TH
-import Control.Monad
-import Control.Monad.Loops
+import Control.Lens ((+=), (^.))
+import Control.Lens.TH (makeFields, makeLenses)
+import Control.Monad (forM_, void)
+import Control.Monad.Loops (untilM)
 import Control.Monad.Trans.Resource (runResourceT)
-import Control.Monad.Trans.State (StateT (runStateT))
+import Control.Monad.Trans.State (StateT (..))
 import qualified Control.Monad.Trans.State as ST
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B
-import qualified Data.Conduit.Binary as CB
 import Data.IORef (atomicWriteIORef, newIORef, readIORef)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Data.Maybe
+import Data.Maybe (fromJust)
 import Data.Sequence (mapWithIndex)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Formatting ((%))
 import qualified Formatting as F
 import Network.HTTP.Conduit
-import Network.HTTP.Simple (getResponseStatus, getResponseStatusCode, httpSink, setRequestHeader, setRequestMethod)
+  ( Manager,
+    Request (..),
+    Response (..),
+  )
+import qualified Network.HTTP.Conduit as HC
+import qualified Network.HTTP.Simple as HC
 import Network.HTTP.Types
+  ( ByteRange (..),
+    ByteRanges,
+    hContentLength,
+    hRange,
+    methodHead,
+  )
+import qualified Network.HTTP.Types as HC
 import Network.HTTP.Types.Header (hAcceptRanges, hContentLength, hContentRange)
 
 data DownloadProgress
@@ -55,19 +67,19 @@ instance Show DownloadProgress where
 
 download :: Text -> FilePath -> IO ()
 download url path = do
-  request <- (parseRequest . T.unpack) url
+  request <- (HC.parseRequest . T.unpack) url
   let headRequest = request {method = "HEAD"}
-  manager <- newManager tlsManagerSettings
-  runResourceT $ do
-    response <- http headRequest manager
+  manager <- HC.newManager HC.tlsManagerSettings
+  C.runResourceT $ do
+    response <- HC.http headRequest manager
     let headers = M.fromList $ responseHeaders response
     let length = fst . fromJust . B.readInt . fromJust $ M.lookup "Content-Length" headers
     let range = BoundProgress {_done = 0, _total = length}
-    runResourceT $
+    C.runResourceT $
       void $
         flip ST.runStateT range $ do
-          response <- http request manager
-          runConduit $ responseBody response .| mapMC doProgress .| CB.sinkFile path
+          response <- HC.http request manager
+          C.runConduit $ responseBody response .| C.mapMC doProgress .| C.sinkFile path
   where
     doProgress bs = do
       done += B.length bs
@@ -128,9 +140,9 @@ $(makeFields ''Task)
 
 getTaskInfo :: Text -> Request -> Manager -> IO TaskInfo
 getTaskInfo url req manager = do
-  let headRequest = setRequestMethod methodHead req
-  runResourceT $ do
-    response <- http headRequest manager
+  let headRequest = HC.setRequestMethod methodHead req
+  C.runResourceT $ do
+    response <- HC.http headRequest manager
     let headers = (M.fromList . responseHeaders) response
     let isRangeSupport = case M.lookup hAcceptRanges headers of
           (Just "bytes") -> True
@@ -140,14 +152,14 @@ getTaskInfo url req manager = do
 
 downloadRange :: Request -> ByteRange -> FilePath -> Manager -> TChan Int -> IO DownloadResult
 downloadRange req range path manager chan = do
-  let request = setRequestHeader hRange [renderByteRanges [range]] req
-  runResourceT $ do
-    response <- http request manager
-    case getResponseStatusCode response of
+  let request = HC.setRequestHeader hRange [HC.renderByteRanges [range]] req
+  C.runResourceT $ do
+    response <- HC.http request manager
+    case HC.getResponseStatusCode response of
       200 -> return RequestRangeIgnored
       416 -> return $ RequestRangeIllegal range
       206 -> do
-        void $ runConduit $ responseBody response .| mapMC progress .| CB.sinkFile path
+        void $ C.runConduit $ responseBody response .| C.mapMC progress .| C.sinkFile path
         return RequestSuccess
       code -> return $ RequestFailed code
   where
@@ -175,8 +187,8 @@ byteRangeToTaskRange _ _ _ _ = error "illegal count"
 
 createTask :: Text -> FilePath -> Int -> IO Task
 createTask url path threadCnt = do
-  manager <- newManager tlsManagerSettings
-  request <- parseRequest . T.unpack $ url
+  manager <- HC.newManager HC.tlsManagerSettings
+  request <- HC.parseRequest . T.unpack $ url
   taskInfo <- getTaskInfo url request manager
   let size = taskInfo ^. sizeInBytes
   let ranges = zipWith (byteRangeToTaskRange path threadCnt) [1 ..] (splitRange size threadCnt)
@@ -184,10 +196,10 @@ createTask url path threadCnt = do
 
 mergeFiles :: FilePath -> [FilePath] -> IO ()
 mergeFiles path paths = do
-  runConduitRes $
-    yieldMany paths
-      .| awaitForever sourceFile
-      .| sinkFile path
+  C.runConduitRes $
+    C.yieldMany paths
+      .| C.awaitForever C.sourceFile
+      .| C.sinkFile path
 
 doTask :: Task -> IO ()
 doTask (Task url request manager path size ranges) = do
