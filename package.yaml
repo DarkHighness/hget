@@ -53,6 +53,8 @@ executables:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -Wall
+    - -O2
     dependencies:
     - hget
 
