@@ -5,32 +5,22 @@ module HGet.Internal.UI where
 
 import Brick (App (..), BrickEvent (..), EventM, Next, Widget)
 import qualified Brick as B
-import qualified Brick.AttrMap as B
 import Brick.BChan (BChan)
 import qualified Brick.BChan as BC
-import qualified Brick.Main as B
 import qualified Brick.Widgets.Border as B
-import Control.Concurrent
-import qualified Control.Concurrent as BC
-import Control.Lens
-import Control.Lens.TH
-import Control.Monad
-import Data.Fixed
+import Control.Concurrent ( threadDelay, forkIO )
+import Control.Lens ( makeClassy, (^.), (.~) )
+import Control.Monad ( forever, void )
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone, UTCTime)
 import qualified Data.Time as TM
-import qualified Data.Time.Clock.System as TM
 import qualified Data.Time.Format.ISO8601 as TM
-import qualified Data.Time.LocalTime as TM
 import Formatting ((%), (%.))
 import qualified Formatting as F
 import Graphics.Vty (Event (..), Key (..))
 import qualified Graphics.Vty as V
-import qualified Graphics.Vty.Input.Events as V
 import qualified HGet.Internal.CLI as CLI
-import qualified Options.Applicative as CLI
-import qualified Text.Printf as T
 
 data HGetState = HGetState
   { _title :: Text,
@@ -84,7 +74,7 @@ handleHGetEvent s _ = B.continue s
 buildTickChannel :: Int -> Int -> IO (BChan HGetEvent)
 buildTickChannel buffer cycle = do
   chan <- BC.newBChan buffer
-  forkIO $
+  void $ forkIO $
     forever $ do
       t <- TM.getCurrentTime
       BC.writeBChan chan (TickEvent t)

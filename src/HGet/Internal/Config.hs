@@ -4,10 +4,19 @@
 
 module HGet.Internal.Config where
 
-import Control.Lens.TH
-import Data.Semigroup ((<>))
+import Control.Lens.TH ( makeFields )
 import Data.Text (Text)
 import Options.Applicative
+    ( optional,
+      argument,
+      help,
+      long,
+      metavar,
+      short,
+      str,
+      strOption,
+      switch,
+      Parser )
 
 data Config = Config
   { configTaskUrl :: Maybe Text,

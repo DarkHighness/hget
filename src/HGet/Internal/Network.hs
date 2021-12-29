@@ -5,7 +5,7 @@
 
 module HGet.Internal.Network where
 
-import Conduit (ConduitT, MonadIO (..), (.|))
+import Conduit (MonadIO (..), (.|))
 import qualified Conduit as C
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TChan)
@@ -14,17 +14,12 @@ import Control.Lens ((+=), (^.))
 import Control.Lens.TH (makeFields, makeLenses)
 import Control.Monad (forM_, void)
 import Control.Monad.Loops (untilM)
-import Control.Monad.Trans.Resource (runResourceT)
-import Control.Monad.Trans.State (StateT (..))
 import qualified Control.Monad.Trans.State as ST
-import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B
 import Data.IORef (atomicWriteIORef, newIORef, readIORef)
-import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
-import Data.Sequence (mapWithIndex)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Formatting ((%))
@@ -44,7 +39,7 @@ import Network.HTTP.Types
     methodHead,
   )
 import qualified Network.HTTP.Types as HC
-import Network.HTTP.Types.Header (hAcceptRanges, hContentLength, hContentRange)
+import Network.HTTP.Types.Header (hAcceptRanges)
 
 data DownloadProgress
   = BoundProgress
@@ -78,8 +73,8 @@ download url path = do
     C.runResourceT $
       void $
         flip ST.runStateT range $ do
-          response <- HC.http request manager
-          C.runConduit $ responseBody response .| C.mapMC doProgress .| C.sinkFile path
+          response' <- HC.http request manager
+          C.runConduit $ responseBody response' .| C.mapMC doProgress .| C.sinkFile path
   where
     doProgress bs = do
       done += B.length bs
@@ -97,7 +92,7 @@ instance Show TaskInfo where
   show (TaskInfo url supportRange sizeInBytes) =
     T.unpack $
       F.sformat
-        ("{ url: " % F.stext % ", isRangeSupport: " % F.stext % ", size : " % F.bytes (F.fixed 2 % " ") % " }")
+        ("{ url: " % F.stext % ", isRangeSupport: " % F.stext % ", size : " % F.bytes (F.fixed 2) % " }")
         url
         (if supportRange then "yes" else "no")
         sizeInBytes
@@ -121,10 +116,10 @@ data Task = Task
   }
 
 instance Show Task where
-  show (Task url req man path size slices) =
+  show (Task url req _ path size slices) =
     T.unpack $
       F.sformat
-        ("{ url: " % F.stext % ", request: " % F.string % ", path: " % F.string % ", size: " % F.bytes (F.fixed 2 % "") % ", slices: " % F.string % "}")
+        ("{ url: " % F.stext % ", request: " % F.string % ", path: " % F.string % ", size: " % F.bytes (F.fixed 2) % ", slices: " % F.string % "}")
         url
         (show req)
         path
@@ -202,15 +197,15 @@ mergeFiles path paths = do
       .| C.sinkFile path
 
 doTask :: Task -> IO ()
-doTask (Task url request manager path size ranges) = do
+doTask (Task _ request manager path size ranges) = do
   chan <- STM.newTChanIO
-  forM_ ranges $ \(TaskRange path range idx) ->
+  forM_ ranges $ \(TaskRange path range _) ->
     forkIO $ do
       r <- downloadRange request range path manager chan
       case r of
         RequestSuccess -> return ()
         RequestRangeIgnored -> error "ignored"
-        RequestRangeIllegal br -> error "illegal"
+        RequestRangeIllegal br -> error $ "illegal range" ++ show br
         RequestFailed n -> error . show $ n
   count <- newIORef 0
   void $ untilM (progress count chan) (predicate count size)
