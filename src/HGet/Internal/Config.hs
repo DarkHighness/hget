@@ -1,14 +1,21 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE TemplateHaskell #-}
+
 module HGet.Internal.Config where
 
+import Control.Lens.TH
 import Data.Semigroup ((<>))
 import Data.Text (Text)
 import Options.Applicative
 
 data Config = Config
-  { _taskUrl :: Maybe Text,
-    _taskFileSaveTo :: Maybe Text,
-    _noUI :: Bool
+  { configTaskUrl :: Maybe Text,
+    configTaskSavePath :: Maybe Text,
+    configNoUI :: Bool
   }
+
+$(makeFields ''Config)
 
 parseConfig :: Parser Config
 parseConfig =

@@ -28,6 +28,7 @@ dependencies:
 - containers
 - text
 - vty
+- http-types
 - http-client
 - http-client-tls
 - http-conduit

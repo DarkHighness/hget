@@ -39,7 +39,7 @@ data HGetState = HGetState
   }
   deriving (Show, Eq)
 
-$(makeLenses ''HGetState)
+$(makeClassy ''HGetState)
 
 data HGetEvent = TickEvent TM.UTCTime
 
