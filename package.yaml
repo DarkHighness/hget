@@ -40,6 +40,7 @@ dependencies:
 - formatting
 - monad-loops
 - directory
+- retry
 
 library:
   source-dirs: src

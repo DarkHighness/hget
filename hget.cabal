@@ -53,6 +53,7 @@ library
     , monad-loops
     , optparse-applicative
     , resourcet
+    , retry
     , stm
     , text
     , time
@@ -84,6 +85,7 @@ executable hget-exe
     , monad-loops
     , optparse-applicative
     , resourcet
+    , retry
     , stm
     , text
     , time
@@ -116,6 +118,7 @@ test-suite hget-test
     , monad-loops
     , optparse-applicative
     , resourcet
+    , retry
     , stm
     , text
     , time
