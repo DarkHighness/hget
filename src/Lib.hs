@@ -5,5 +5,5 @@ import Control.Concurrent.STM (newTChanIO)
 
 lib :: StateT Int IO ()
 lib = do
-    chan <- liftIO $ newTChanIO 
+    chan <- liftIO newTChanIO
     return ()

@@ -2,7 +2,6 @@ module HGet.Internal.TH where
 
 import Control.Lens (DefName (MethodName), FieldNamer, LensRules, declareLensesWith)
 import Control.Lens.Internal.FieldTH (LensRules (..), makeFieldOptics)
-import Data.ByteString (stripPrefix)
 import Data.Char (isUpper, toLower)
 import Data.Maybe (maybeToList)
 import Language.Haskell.TH (mkName, nameBase, DecsQ, Name)
@@ -21,7 +20,7 @@ simpleRule =
     }
 
 simpleNamer :: FieldNamer
-simpleNamer tyName fields field = maybeToList $ do
+simpleNamer _ _ field = maybeToList $ do
   let fieldName = dropWhile (not . isUpper) (nameBase field)
   method <- computeMethod fieldName
   let cls = "Has" ++ fieldName

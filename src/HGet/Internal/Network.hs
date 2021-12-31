@@ -9,13 +9,13 @@ module HGet.Internal.Network where
 
 import Conduit (MonadIO (..), (.|))
 import qualified Conduit as C
-import Control.Concurrent (forkIO, forkOS)
+import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TChan)
 import qualified Control.Concurrent.STM as STM
 import qualified Control.Exception as Ex
 import Control.Lens (Each (each), ix, sumOf, (&), (.~), (^.), (^..))
 import Control.Monad (forM_, void)
-import Control.Monad.Loops (untilM_, whileM_)
+import Control.Monad.Loops (whileM_)
 import qualified Control.Monad.Trans.State as ST
 import Control.Retry (RetryAction (ConsultPolicy, ConsultPolicyOverrideDelay, DontRetry), RetryPolicyM)
 import qualified Control.Retry as R
