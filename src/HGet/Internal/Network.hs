@@ -13,8 +13,8 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TChan)
 import qualified Control.Concurrent.STM as STM
 import qualified Control.Exception as Ex
-import Control.Lens (Each (each), (+=), (^.), (^..))
-import Control.Lens.TH (makeFields, makeLenses)
+import Control.Lens (Each (each), (.~), (^.), (^..))
+import Control.Lens.TH (makeFields)
 import Control.Monad (forM_, void)
 import Control.Monad.Loops (whileM_)
 import qualified Control.Monad.Trans.State as ST
@@ -33,7 +33,7 @@ import qualified Formatting as F
 import GHC.IO.Device (SeekMode (AbsoluteSeek))
 import qualified GHC.IO.Handle as IO
 import qualified GHC.IO.Handle.FD as IO
-import GHC.IO.IOMode (IOMode (AppendMode, WriteMode))
+import GHC.IO.IOMode (IOMode (WriteMode))
 import Network.HTTP.Conduit
   ( HttpException (..),
     Manager,
@@ -44,7 +44,6 @@ import qualified Network.HTTP.Conduit as HC
 import qualified Network.HTTP.Simple as HC
 import Network.HTTP.Types
   ( ByteRange (..),
-    ByteRanges,
     hContentLength,
     hRange,
     methodHead,
@@ -52,47 +51,6 @@ import Network.HTTP.Types
 import qualified Network.HTTP.Types as HC
 import Network.HTTP.Types.Header (hAcceptRanges, hRetryAfter)
 import System.Directory (removeFile)
-
--- data DownloadProgress
---   = BoundProgress
---       { _done :: Integer,
---         _total :: Integer
---       }
---   | UnboundProgress
---       { _done :: Integer
---       }
---   deriving (Eq)
-
--- $(makeLenses ''DownloadProgress)
-
--- instance Show DownloadProgress where
---   show (BoundProgress a b) =
---     let fa = fromIntegral a :: Float
---         fb = fromIntegral b :: Float
---      in T.unpack $ F.sformat (F.float % "%") (100 * fa / fb)
---   show (UnboundProgress a) = T.unpack $ F.sformat (F.bytes (F.fixed 2)) a
-
--- download :: Text -> FilePath -> IO ()
--- download url path = do
---   request <- (HC.parseRequest . T.unpack) url
---   let headRequest = request {method = "HEAD"}
---   manager <- HC.newManager HC.tlsManagerSettings
---   C.runResourceT $ do
---     response <- HC.http headRequest manager
---     let headers = M.fromList $ responseHeaders response
---     let length = fst . fromJust . B.readInteger . fromJust $ M.lookup "Content-Length" headers
---     let range = BoundProgress {_done = 0, _total = length}
---     C.runResourceT $
---       void $
---         flip ST.runStateT range $ do
---           response' <- HC.http request manager
---           C.runConduit $ responseBody response' .| C.mapMC doProgress .| C.sinkFile path
---   where
---     doProgress bs = do
---       done += (fromIntegral . B.length) bs
---       r <- ST.get
---       liftIO $ print r
---       return bs
 
 data TaskInfo = TaskInfo
   { taskInfoUrl :: Text,
@@ -138,14 +96,24 @@ instance Show Task where
         size
         (show slices)
 
-data DownloadResult = RequestSuccess | RequestRangeIgnored | RequestRangeIllegal ByteRange | RequestTooManyRequest (Maybe Int) | RequestFailed Int
+data RequestResult
+  = RequestSuccess
+  | RequestRangeIgnored
+  | RequestRangeIllegal WorkerRange
+  | RequestTooManyRequest (Maybe Int)
+  | RequestFailed Int
   deriving (Show)
 
-data WorkerEvent = WorkerProgressUpdateEvent {_weWhich :: Int, _weFrom :: Integer, _weNow :: Integer, _weTo :: Integer} | WorkDoneEvent {_weWhich :: Int} | WorkFailedEvent {_weWhich :: Int}
+data WorkerEvent
+  = WorkerProgressUpdateEvent {workerEventWhich :: Int, workerEventRange :: WorkerRange, workerEventNow :: Integer}
+  | WorkerDoneEvent {workerEventWhich :: Int, workerEventResult :: RequestResult}
+  | WorkerFailedEvent {workerEventWhich :: Int, workEventResult :: HttpException}
   deriving (Show)
 
-data WorkerRange = WorkerRange {_wrFrom :: Integer, _wrTo :: Integer}
+data WorkerRange = WorkerRange {workerRangeFrom :: Integer, workerRangeTo :: Integer}
   deriving (Show, Eq)
+
+type WorkerRanges = [WorkerRange]
 
 toByteRange :: WorkerRange -> ByteRange
 toByteRange (WorkerRange a b) = ByteRangeFromTo a b
@@ -170,26 +138,28 @@ getTaskInfo url req manager = do
 
 downloadRangeRetry :: Int -> Request -> WorkerRange -> FilePath -> Manager -> TChan WorkerEvent -> RetryPolicyM IO -> IO ()
 downloadRangeRetry workId req range path manager chan policy = void $ do
-  ref <- newIORef initialState
+  ref <- newIORef $ range ^. from
 
   R.retryingDynamic
     policy
     ( \_ r -> do
         return
           ( case r of
-              RequestSuccess -> DontRetry
-              RequestRangeIgnored -> DontRetry
-              RequestRangeIllegal _ -> DontRetry
-              RequestTooManyRequest Nothing -> ConsultPolicy
-              RequestTooManyRequest (Just delay) -> ConsultPolicyOverrideDelay (1000 * delay)
-              RequestFailed _ -> ConsultPolicy
+              Left _ -> DontRetry
+              Right r -> case r of
+                RequestSuccess -> DontRetry
+                RequestRangeIgnored -> DontRetry
+                RequestRangeIllegal _ -> DontRetry
+                RequestTooManyRequest Nothing -> ConsultPolicy
+                RequestTooManyRequest (Just delay) -> ConsultPolicyOverrideDelay (1000 * delay)
+                RequestFailed _ -> ConsultPolicy
           )
     )
     ( \_ -> do
-        r <- (Ex.try :: IO DownloadResult -> IO (Either HttpException DownloadResult)) $ do
+        r <- (Ex.try :: IO RequestResult -> IO (Either HttpException RequestResult)) $ do
           p' <- IO.readIORef ref
 
-          let req' = HC.setRequestHeader hRange [HC.renderByteRanges [createRange (toByteRange range) p']] req
+          let req' = HC.setRequestHeader hRange [HC.renderByteRanges [toByteRange $ from .~ p' $ range]] req
 
           C.runResourceT $ do
             resp <- HC.http req' manager
@@ -217,7 +187,7 @@ downloadRangeRetry workId req range path manager chan policy = void $ do
                             let t' = t + fromIntegral n
                             IO.atomicWriteIORef ref t'
                             STM.atomically $ do
-                              STM.writeTChan chan $ WorkerProgressUpdateEvent workId
+                              STM.writeTChan chan (WorkerProgressUpdateEvent workId range t')
                           return bs
                       )
                     .| C.sinkHandle handle
@@ -226,55 +196,27 @@ downloadRangeRetry workId req range path manager chan policy = void $ do
 
                 return RequestSuccess
               code -> return $ RequestFailed code
-        case r of
-          Left e -> do
-            print e
-            return $ RequestFailed (-1)
-          Right r -> return r
+        liftIO $
+          STM.atomically $ do
+            STM.writeTChan chan $ case r of
+              Left e -> WorkerFailedEvent workId e
+              Right r -> WorkerDoneEvent workId r
+        return r
     )
-  where
-    initialState :: Integer
-    initialState = case range of
-      ByteRangeFrom n -> n
-      ByteRangeFromTo n _ -> n
-      ByteRangeSuffix _ -> error "unspport range type"
 
-    createRange :: ByteRange -> Integer -> ByteRange
-    createRange (ByteRangeFrom _) n = ByteRangeFrom n
-    createRange (ByteRangeFromTo _ b) n = ByteRangeFromTo n b
-    createRange _ _ = error "unsupport range type"
-
--- downloadRange :: Request -> ByteRange -> FilePath -> Manager -> TChan Int -> IO DownloadResult
--- downloadRange req range path manager chan = do
---   let request = HC.setRequestHeader hRange [HC.renderByteRanges [range]] req
---   C.runResourceT $ do
---     response <- HC.http request manager
---     case HC.getResponseStatusCode response of
---       200 -> return RequestRangeIgnored
---       416 -> return $ RequestRangeIllegal range
---       206 -> do
---         void $ C.runConduit $ responseBody response .| C.mapMC progress .| C.sinkFile path
---         return RequestSuccess
---       code -> return $ RequestFailed code
---   where
---     progress bs = do
---       liftIO . STM.atomically $
---         STM.writeTChan chan (B.length bs)
---       return bs
-
-splitRange :: Integer -> Integer -> ByteRanges
+splitRange :: Integer -> Integer -> WorkerRanges
 splitRange sizeInBytes segmentCnt = map go [(0 :: Integer) .. (pred segmentCnt)]
   where
     sizePerSeg :: Integer
     sizePerSeg = fromIntegral . ceiling $ (fromIntegral sizeInBytes :: Double) / (fromIntegral segmentCnt :: Double)
 
-    go :: Integer -> ByteRange
-    go i = ByteRangeFromTo (i' * sizePerSeg) (s' `min` ((i' + 1) * sizePerSeg - 1))
+    go :: Integer -> WorkerRange
+    go i = WorkerRange (i' * sizePerSeg) (s' `min` ((i' + 1) * sizePerSeg - 1))
       where
         i' = fromIntegral i
         s' = fromIntegral sizeInBytes - 1
 
-byteRangeToTaskRange :: FilePath -> Integer -> Integer -> ByteRange -> TaskRange
+byteRangeToTaskRange :: FilePath -> Integer -> Integer -> WorkerRange -> TaskRange
 byteRangeToTaskRange basePath 1 rangeIdx range = TaskRange basePath range rangeIdx
 byteRangeToTaskRange basePath totalCnt rangeIdx range | totalCnt > 1 = TaskRange (basePath ++ ".part" ++ show rangeIdx) range rangeIdx
 byteRangeToTaskRange _ _ _ _ = error "illegal count"
@@ -303,7 +245,7 @@ doTask (Task _ request manager path size ranges) = void $
     void $
       liftIO $ do
         forM_
-          (zip ranges [1 ..])
+          (zip [1 ..] ranges)
           ( \(workerId, TaskRange tempPath range _) ->
               forkIO $ do
                 downloadRangeRetry workerId request range tempPath manager chan R.retryPolicyDefault
