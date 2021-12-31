@@ -326,7 +326,7 @@ doTask (Task _ request manager path size ranges) = void $
             zipWith (curry (\(workerId, TaskRange _ (Range a b) _) -> TaskRunningWorkerState workerId 0 (b - a) Ready)) [0 ..] ranges
         }
 
-download' :: Text -> FilePath -> Integer -> IO ()
-download' url path threadCount = do
+download :: Text -> FilePath -> Integer -> IO ()
+download url path threadCount = do
   task <- createTask url path threadCount
   void $ doTask task
