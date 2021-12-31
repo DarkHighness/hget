@@ -41,6 +41,7 @@ dependencies:
 - monad-loops
 - directory
 - retry
+- template-haskell
 
 library:
   source-dirs: src

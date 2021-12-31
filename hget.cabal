@@ -28,6 +28,7 @@ library
       HGet.Internal.CLI
       HGet.Internal.Config
       HGet.Internal.Network
+      HGet.Internal.TH
       HGet.Internal.UI
       Lib
   other-modules:
@@ -55,6 +56,7 @@ library
     , resourcet
     , retry
     , stm
+    , template-haskell
     , text
     , time
     , transformers
@@ -87,6 +89,7 @@ executable hget-exe
     , resourcet
     , retry
     , stm
+    , template-haskell
     , text
     , time
     , transformers
@@ -120,6 +123,7 @@ test-suite hget-test
     , resourcet
     , retry
     , stm
+    , template-haskell
     , text
     , time
     , transformers

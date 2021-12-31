@@ -24,6 +24,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B
 import Data.IORef (newIORef)
 import qualified Data.IORef as IO
+import Data.Map (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -34,6 +35,7 @@ import GHC.IO.Device (SeekMode (AbsoluteSeek))
 import qualified GHC.IO.Handle as IO
 import qualified GHC.IO.Handle.FD as IO
 import GHC.IO.IOMode (IOMode (WriteMode))
+import HGet.Internal.TH (makeSimple)
 import Network.HTTP.Conduit
   ( HttpException (..),
     Manager,
@@ -53,9 +55,9 @@ import Network.HTTP.Types.Header (hAcceptRanges, hRetryAfter)
 import System.Directory (removeFile)
 
 data TaskInfo = TaskInfo
-  { taskInfoUrl :: Text,
-    taskInfoIsSupportRange :: Bool,
-    taskInfoSizeInBytes :: Integer
+  { _tiUrl :: Text,
+    _tiSupportRange :: Bool,
+    _tiTotalInBytes :: Integer
   }
 
 instance Show TaskInfo where
@@ -67,22 +69,32 @@ instance Show TaskInfo where
         (if supportRange then "yes" else "no")
         sizeInBytes
 
+data Range = Range {rangeFrom :: Integer, rangeTo :: Integer}
+  deriving (Show, Eq)
+
+$(makeSimple ''Range)
+
+type Ranges = [Range]
+
+toByteRange :: Range -> ByteRange
+toByteRange (Range a b) = ByteRangeFromTo a b
+
 data TaskRange = TaskRange
-  { taskRangeFilePath :: FilePath,
-    taskRangeByteRange :: WorkerRange,
-    taskRangeIndex :: Integer
+  { _trSavePath :: FilePath,
+    _trRange :: Range,
+    _trRangeIndex :: Integer
   }
   deriving (Show, Eq)
 
 type TaskRanges = [TaskRange]
 
 data Task = Task
-  { taskUrl :: Text,
-    taskRequest :: Request,
-    taskManager :: Manager,
-    taskSavePath :: FilePath,
-    taskSizeInBytes :: Integer,
-    taskSlices :: TaskRanges
+  { _tUrl :: Text,
+    _tRequest :: Request,
+    _tManager :: Manager,
+    _tSavePath :: FilePath,
+    _tTotalInBytes :: Integer,
+    _tSlices :: TaskRanges
   }
 
 instance Show Task where
@@ -96,33 +108,39 @@ instance Show Task where
         size
         (show slices)
 
+data TaskRunningWorkerState = TaskRunningWorkerState
+  { _trwsWhich :: Int,
+    _trwsNow :: Integer,
+    _trwsTotal :: Integer
+  }
+
+data TaskRunningState = TaskRunningState
+  { _trsNow :: Integer,
+    _trsTotal :: Integer,
+    _trsWorkStates :: Map Int TaskRunningWorkerState
+  }
+
+$(makeSimple ''TaskRunningState)
+$(makeSimple ''TaskRunningWorkerState)
+
 data RequestResult
   = RequestSuccess
   | RequestRangeIgnored
-  | RequestRangeIllegal WorkerRange
+  | RequestRangeIllegal Range
   | RequestTooManyRequest (Maybe Int)
   | RequestFailed Int
   deriving (Show)
 
 data WorkerEvent
-  = WorkerProgressUpdateEvent {workerEventWhich :: Int, workerEventRange :: WorkerRange, workerEventNow :: Integer}
-  | WorkerDoneEvent {workerEventWhich :: Int, workerEventResult :: RequestResult}
-  | WorkerFailedEvent {workerEventWhich :: Int, workEventResult :: HttpException}
+  = WorkerProgressUpdateEvent {_weWhich :: Int, _weWorkerRange :: Range, _weWorkerNow :: Integer}
+  | WorkerDoneEvent {_weWhich :: Int, _weResult :: RequestResult}
+  | WorkerFailedEvent {_weWhich :: Int, _weEx :: HttpException}
   deriving (Show)
 
-data WorkerRange = WorkerRange {workerRangeFrom :: Integer, workerRangeTo :: Integer}
-  deriving (Show, Eq)
-
-type WorkerRanges = [WorkerRange]
-
-toByteRange :: WorkerRange -> ByteRange
-toByteRange (WorkerRange a b) = ByteRangeFromTo a b
-
-$(makeFields ''TaskInfo)
-$(makeFields ''TaskRange)
-$(makeFields ''Task)
-$(makeFields ''WorkerEvent)
-$(makeFields ''WorkerRange)
+$(makeSimple ''TaskInfo)
+$(makeSimple ''TaskRange)
+$(makeSimple ''Task)
+$(makeSimple ''WorkerEvent)
 
 getTaskInfo :: Text -> Request -> Manager -> IO TaskInfo
 getTaskInfo url req manager = do
@@ -136,7 +154,7 @@ getTaskInfo url req manager = do
     let length = fst . fromJust . B.readInteger . fromJust $ M.lookup hContentLength headers
     return $ TaskInfo url isRangeSupport length
 
-downloadRangeRetry :: Int -> Request -> WorkerRange -> FilePath -> Manager -> TChan WorkerEvent -> RetryPolicyM IO -> IO ()
+downloadRangeRetry :: Int -> Request -> Range -> FilePath -> Manager -> TChan WorkerEvent -> RetryPolicyM IO -> IO ()
 downloadRangeRetry workId req range path manager chan policy = void $ do
   ref <- newIORef $ range ^. from
 
@@ -204,19 +222,19 @@ downloadRangeRetry workId req range path manager chan policy = void $ do
         return r
     )
 
-splitRange :: Integer -> Integer -> WorkerRanges
+splitRange :: Integer -> Integer -> Ranges
 splitRange sizeInBytes segmentCnt = map go [(0 :: Integer) .. (pred segmentCnt)]
   where
     sizePerSeg :: Integer
     sizePerSeg = fromIntegral . ceiling $ (fromIntegral sizeInBytes :: Double) / (fromIntegral segmentCnt :: Double)
 
-    go :: Integer -> WorkerRange
-    go i = WorkerRange (i' * sizePerSeg) (s' `min` ((i' + 1) * sizePerSeg - 1))
+    go :: Integer -> Range
+    go i = Range (i' * sizePerSeg) (s' `min` ((i' + 1) * sizePerSeg - 1))
       where
         i' = fromIntegral i
         s' = fromIntegral sizeInBytes - 1
 
-byteRangeToTaskRange :: FilePath -> Integer -> Integer -> WorkerRange -> TaskRange
+byteRangeToTaskRange :: FilePath -> Integer -> Integer -> Range -> TaskRange
 byteRangeToTaskRange basePath 1 rangeIdx range = TaskRange basePath range rangeIdx
 byteRangeToTaskRange basePath totalCnt rangeIdx range | totalCnt > 1 = TaskRange (basePath ++ ".part" ++ show rangeIdx) range rangeIdx
 byteRangeToTaskRange _ _ _ _ = error "illegal count"
@@ -226,7 +244,7 @@ createTask url path threadCnt = do
   manager <- HC.newManager HC.tlsManagerSettings
   request <- HC.parseRequest . T.unpack $ url
   taskInfo <- getTaskInfo url request manager
-  let size = taskInfo ^. sizeInBytes
+  let size = taskInfo ^. totalInBytes
   let ranges = zipWith (byteRangeToTaskRange path threadCnt) [1 ..] (splitRange size threadCnt)
   return $ Task url request manager path size ranges
 
@@ -261,13 +279,13 @@ doTask (Task _ request manager path size ranges) = void $
             STM.atomically $ do
               STM.readTChan chan
           s <- ST.get
-          let s' = s + c
-          ST.put s'
+          -- let s' = s + c
+          ST.put s
       )
 
     void $
       liftIO $ do
-        let files = ranges ^.. each . filePath
+        let files = ranges ^.. each . savePath
         case length files of
           0 -> error "illegal temp files count"
           1 -> return ()
