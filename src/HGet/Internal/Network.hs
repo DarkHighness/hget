@@ -9,14 +9,13 @@ module HGet.Internal.Network where
 
 import Conduit (MonadIO (..), (.|))
 import qualified Conduit as C
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, forkOS)
 import Control.Concurrent.STM (TChan)
 import qualified Control.Concurrent.STM as STM
 import qualified Control.Exception as Ex
-import Control.Lens (Each (each), (.~), (^.), (^..))
-import Control.Lens.TH (makeFields)
+import Control.Lens (Each (each), ix, sumOf, (&), (.~), (^.), (^..))
 import Control.Monad (forM_, void)
-import Control.Monad.Loops (whileM_)
+import Control.Monad.Loops (untilM_, whileM_)
 import qualified Control.Monad.Trans.State as ST
 import Control.Retry (RetryAction (ConsultPolicy, ConsultPolicyOverrideDelay, DontRetry), RetryPolicyM)
 import qualified Control.Retry as R
@@ -24,7 +23,6 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B
 import Data.IORef (newIORef)
 import qualified Data.IORef as IO
-import Data.Map (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -108,17 +106,24 @@ instance Show Task where
         size
         (show slices)
 
+data WorkerStatus = Ready | Running | Failed | Done
+  deriving (Show, Eq, Ord)
+
 data TaskRunningWorkerState = TaskRunningWorkerState
   { _trwsWhich :: Int,
     _trwsNow :: Integer,
-    _trwsTotal :: Integer
+    _trwsTotal :: Integer,
+    _trwsStatus :: WorkerStatus
   }
+  deriving (Show)
 
 data TaskRunningState = TaskRunningState
   { _trsNow :: Integer,
     _trsTotal :: Integer,
-    _trsWorkStates :: Map Int TaskRunningWorkerState
+    _trsWorkers :: Int,
+    _trsWorkerStates :: [TaskRunningWorkerState]
   }
+  deriving (Show)
 
 $(makeSimple ''TaskRunningState)
 $(makeSimple ''TaskRunningWorkerState)
@@ -132,7 +137,8 @@ data RequestResult
   deriving (Show)
 
 data WorkerEvent
-  = WorkerProgressUpdateEvent {_weWhich :: Int, _weWorkerRange :: Range, _weWorkerNow :: Integer}
+  = WorkerStartRunningEvent {_weWhich :: Int}
+  | WorkerProgressUpdateEvent {_weWhich :: Int, _weWorkerRange :: Range, _weWorkerNow :: Integer}
   | WorkerDoneEvent {_weWhich :: Int, _weResult :: RequestResult}
   | WorkerFailedEvent {_weWhich :: Int, _weEx :: HttpException}
   deriving (Show)
@@ -156,11 +162,11 @@ getTaskInfo url req manager = do
 
 downloadRangeRetry :: Int -> Request -> Range -> FilePath -> Manager -> TChan WorkerEvent -> RetryPolicyM IO -> IO ()
 downloadRangeRetry workId req range path manager chan policy = void $ do
-  ref <- newIORef $ range ^. from
+  ref <- newIORef 0
 
   R.retryingDynamic
     policy
-    ( \_ r -> do
+    ( \_ r ->
         return
           ( case r of
               Left _ -> DontRetry
@@ -177,7 +183,7 @@ downloadRangeRetry workId req range path manager chan policy = void $ do
         r <- (Ex.try :: IO RequestResult -> IO (Either HttpException RequestResult)) $ do
           p' <- IO.readIORef ref
 
-          let req' = HC.setRequestHeader hRange [HC.renderByteRanges [toByteRange $ from .~ p' $ range]] req
+          let req' = HC.setRequestHeader hRange [HC.renderByteRanges [toByteRange $ from .~ (range ^. from + p') $ range]] req
 
           C.runResourceT $ do
             resp <- HC.http req' manager
@@ -194,9 +200,8 @@ downloadRangeRetry workId req range path manager chan policy = void $ do
                   IO.hSeek handle AbsoluteSeek p'
                   return handle
 
-                C.runConduit $ do
-                  do
-                    responseBody resp
+                C.runConduit $
+                  responseBody resp
                     .| C.mapMC
                       ( \bs -> do
                           liftIO $ do
@@ -204,7 +209,7 @@ downloadRangeRetry workId req range path manager chan policy = void $ do
                             let n = B.length bs
                             let t' = t + fromIntegral n
                             IO.atomicWriteIORef ref t'
-                            STM.atomically $ do
+                            STM.atomically $
                               STM.writeTChan chan (WorkerProgressUpdateEvent workId range t')
                           return bs
                       )
@@ -215,7 +220,7 @@ downloadRangeRetry workId req range path manager chan policy = void $ do
                 return RequestSuccess
               code -> return $ RequestFailed code
         liftIO $
-          STM.atomically $ do
+          STM.atomically $
             STM.writeTChan chan $ case r of
               Left e -> WorkerFailedEvent workId e
               Right r -> WorkerDoneEvent workId r
@@ -226,13 +231,12 @@ splitRange :: Integer -> Integer -> Ranges
 splitRange sizeInBytes segmentCnt = map go [(0 :: Integer) .. (pred segmentCnt)]
   where
     sizePerSeg :: Integer
-    sizePerSeg = fromIntegral . ceiling $ (fromIntegral sizeInBytes :: Double) / (fromIntegral segmentCnt :: Double)
+    sizePerSeg = ceiling $ (fromIntegral sizeInBytes :: Double) / (fromIntegral segmentCnt :: Double)
 
     go :: Integer -> Range
-    go i = Range (i' * sizePerSeg) (s' `min` ((i' + 1) * sizePerSeg - 1))
+    go i = Range (i * sizePerSeg) (s' `min` ((i + 1) * sizePerSeg - 1))
       where
-        i' = fromIntegral i
-        s' = fromIntegral sizeInBytes - 1
+        s' = sizeInBytes - 1
 
 byteRangeToTaskRange :: FilePath -> Integer -> Integer -> Range -> TaskRange
 byteRangeToTaskRange basePath 1 rangeIdx range = TaskRange basePath range rangeIdx
@@ -257,30 +261,49 @@ mergeFiles path paths =
 
 doTask :: Task -> IO ()
 doTask (Task _ request manager path size ranges) = void $
-  flip ST.evalStateT (0 :: Integer) $ do
+  flip ST.evalStateT initialState $ do
     chan <- liftIO STM.newTChanIO
 
     void $
-      liftIO $ do
+      liftIO $
         forM_
-          (zip [1 ..] ranges)
+          (zip [0 ..] ranges)
           ( \(workerId, TaskRange tempPath range _) ->
               forkIO $ do
-                downloadRangeRetry workerId request range tempPath manager chan R.retryPolicyDefault
+                c' <- STM.atomically $ do
+                  c' <- STM.dupTChan chan
+                  STM.writeTChan c' $ WorkerStartRunningEvent workerId
+                  return c'
+                downloadRangeRetry workerId request range tempPath manager c' R.retryPolicyDefault
           )
 
     whileM_
       ( do
-          c <- ST.get
-          return $ c < size
+          s <- ST.get
+          return $ any (\x -> let st = x ^. status in st == Ready || st == Running) (s ^. workerStates)
       )
       ( do
-          c <- liftIO $
-            STM.atomically $ do
-              STM.readTChan chan
+          e <-
+            liftIO $
+              STM.atomically $
+                STM.readTChan chan
+
           s <- ST.get
-          -- let s' = s + c
-          ST.put s
+
+          ST.put
+            ( case e of
+                WorkerStartRunningEvent i -> s & (workerStates . ix i . status .~ Running)
+                WorkerProgressUpdateEvent i _ n ->
+                  let s' = s & (workerStates . ix i . now .~ n)
+                      n' = sumOf (workerStates . each . now) s' :: Integer
+                   in now .~ n' $ s'
+                WorkerDoneEvent i r -> s & (workerStates . ix i . status .~ Done)
+                WorkerFailedEvent i ex -> s & (workerStates . ix i . status .~ Failed)
+            )
+
+          s' <- ST.get
+
+          liftIO $ print $ F.sformat (F.bytes (F.fixed 2)) (s' ^. now)
       )
 
     void $
@@ -292,6 +315,16 @@ doTask (Task _ request manager path size ranges) = void $
           _ -> do
             mergeFiles path files
             forM_ files removeFile
+  where
+    initialState :: TaskRunningState
+    initialState =
+      TaskRunningState
+        { _trsNow = 0,
+          _trsTotal = size,
+          _trsWorkers = length ranges,
+          _trsWorkerStates =
+            zipWith (curry (\(workerId, TaskRange _ (Range a b) _) -> TaskRunningWorkerState workerId 0 (b - a) Ready)) [0 ..] ranges
+        }
 
 download' :: Text -> FilePath -> Integer -> IO ()
 download' url path threadCount = do
